@@ -27,6 +27,8 @@ set(HEADERS
     color_theme.hpp
     hotkey_manager.hpp
     usage_tracker.hpp
+    command_blacklist.hpp
+    shell_Utilities.hpp
 )
 
 # Create executable

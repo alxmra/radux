@@ -1,4 +1,5 @@
 #include "config_loader.hpp"
+#include "command_blacklist.hpp"
 #include <yaml-cpp/yaml.h>
 #include <sstream>
 #include <algorithm>
@@ -218,6 +219,44 @@ bool RadialConfig::validate() const {
     for (const auto& item : items) {
         if (!item.is_valid()) {
             std::cerr << "Invalid item found\n";
+            return false;
+        }
+    }
+
+    // SECURITY: Validate all commands against blacklist
+    auto& blacklist = CommandBlacklist::instance();
+    for (const auto& item : items) {
+        if (!validate_item_commands(item, blacklist)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Validate commands in a menu item (including submenus)
+bool RadialConfig::validate_item_commands(const MenuItem& item, CommandBlacklist& blacklist) const {
+    // Check submenu items recursively
+    if (item.has_submenu()) {
+        for (const auto& subitem : item.submenu) {
+            if (!validate_item_commands(subitem, blacklist)) {
+                return false;
+            }
+        }
+    } else if (!item.command.empty()) {
+        // Check if command is blacklisted
+        if (blacklist.is_blacklisted(item.command)) {
+            std::cerr << "SECURITY ERROR in config: " << blacklist.get_blacklisted_info(item.command) << "\n";
+            std::cerr << "  Item: " << item.label << "\n";
+            std::cerr << "  Command: " << item.command << "\n";
+            return false;
+        }
+
+        // Check for dangerous patterns
+        if (blacklist.has_dangerous_patterns(item.command)) {
+            std::cerr << "SECURITY ERROR in config: " << blacklist.get_blacklisted_info(item.command) << "\n";
+            std::cerr << "  Item: " << item.label << "\n";
+            std::cerr << "  Command: " << item.command << "\n";
             return false;
         }
     }

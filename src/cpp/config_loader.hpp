@@ -10,6 +10,9 @@ namespace YAML {
     class Node;
 }
 
+// Forward declaration for blacklist
+class CommandBlacklist;
+
 class RadialConfig {
 public:
     // Geometry
@@ -44,4 +47,7 @@ private:
 
     // Helper to parse menu item from YAML node
     static MenuItem parse_menu_item(const YAML::Node& node, const Theme& parent_theme);
+
+    // Validate commands in menu items (recursive for submenus)
+    bool validate_item_commands(const MenuItem& item, CommandBlacklist& blacklist) const;
 };

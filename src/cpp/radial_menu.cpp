@@ -1,6 +1,8 @@
 #include "radial_menu.hpp"
 #include "hotkey_manager.hpp"
 #include "usage_tracker.hpp"
+#include "command_blacklist.hpp"
+#include "shell_Utilities.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -668,6 +670,24 @@ void RadialMenu::execute_command(const MenuItem& item) {
         return;
     }
 
+    // SECURITY: Validate command against blacklist
+    auto& blacklist = CommandBlacklist::instance();
+    if (blacklist.is_blacklisted(item.command)) {
+        std::cerr << "SECURITY ERROR: " << blacklist.get_blacklisted_info(item.command) << "\n";
+        std::cerr << "Command execution blocked. Please check your configuration.\n";
+        start_close_animation();
+        return;
+    }
+
+    // SECURITY: Check for dangerous shell patterns
+    if (blacklist.has_dangerous_patterns(item.command)) {
+        std::cerr << "SECURITY ERROR: " << blacklist.get_blacklisted_info(item.command) << "\n";
+        std::cerr << "Command contains dangerous patterns and was blocked.\n";
+        std::cerr << "Blocked command: " << item.command << "\n";
+        start_close_animation();
+        return;
+    }
+
     // Record usage
     if (usage_tracker_) {
         usage_tracker_->record_usage(item.label, current_menu_path_);
@@ -684,11 +704,19 @@ void RadialMenu::execute_command(const MenuItem& item) {
             Glib::spawn_command_line_sync(item.command, &stdout, &stderr, &exit_code);
 
             if (exit_code == 0 && !stdout.empty()) {
-                // Send notification
-                std::string notify_cmd = "notify-send '" + item.label + "' '" + stdout + "'";
+                // SECURITY: Use proper escaping for notification
+                std::string escaped_label = ShellEscaper::escape_notify_arg(item.label);
+                std::string escaped_stdout = ShellEscaper::escape_notify_arg(stdout);
+
+                // Trim stdout to reasonable size for notification
+                if (escaped_stdout.length() > 500) {
+                    escaped_stdout = escaped_stdout.substr(0, 497) + "...";
+                }
+
+                std::string notify_cmd = "notify-send " + escaped_label + " " + escaped_stdout;
                 Glib::spawn_command_line_async(notify_cmd);
             } else if (exit_code != 0) {
-                std::cerr << "Command failed: " << stderr << "\n";
+                std::cerr << "Command failed with exit code " << exit_code << ": " << stderr << "\n";
             }
         } catch (const Glib::SpawnError& e) {
             std::cerr << "Failed to execute command: " << e.what() << "\n";
