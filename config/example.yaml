@@ -1,0 +1,8 @@
+radius: 120
+items:
+  - label: "Brave"
+    command: "brave"
+    description: "algo"
+  - label: "st"
+    command: "st"
+    description: "algo"
