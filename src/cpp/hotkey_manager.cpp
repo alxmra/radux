@@ -21,6 +21,12 @@ Hotkey Hotkey::from_string(const std::string& str) {
             // Last part is the key
             std::string key = upper.substr(pos);
             hk.keyval = gdk_keyval_from_name(key.c_str());
+
+            // Also try lowercase if uppercase didn't work
+            if (hk.keyval == GDK_KEY_VoidSymbol || hk.keyval == 0) {
+                std::string lower_key = str.substr(pos);  // Use original case for the key part
+                hk.keyval = gdk_keyval_from_name(lower_key.c_str());
+            }
             break;
         }
 
@@ -50,7 +56,21 @@ bool Hotkey::matches(guint keyval, Gdk::ModifierType state) const {
     // Normalize: ignore Caps Lock
     normalized_state &= ~(Gdk::ModifierType::LOCK_MASK);
 
-    return this->keyval == keyval && this->modifiers == normalized_state;
+    // Direct match
+    if (this->keyval == keyval && this->modifiers == normalized_state) {
+        return true;
+    }
+
+    // For letter keys, try case-insensitive matching
+    // Convert both to uppercase for comparison
+    guint this_upper = gdk_keyval_to_upper(this->keyval);
+    guint key_upper = gdk_keyval_to_upper(keyval);
+
+    if (this_upper == key_upper && this->modifiers == normalized_state) {
+        return true;
+    }
+
+    return false;
 }
 
 void HotkeyManager::build_map(const std::vector<MenuItem>& items) {
@@ -62,6 +82,10 @@ void HotkeyManager::build_map(const std::vector<MenuItem>& items) {
             Hotkey hk = Hotkey::from_string(*items[i].hotkey);
             hotkey_map_[hk.combo] = i;
             item_hotkeys_[i] = hk;
+            std::cerr << "HotkeyManager: Registered hotkey '" << hk.combo
+                      << "' (keyval=" << hk.keyval
+                      << ", modifiers=" << static_cast<int>(hk.modifiers)
+                      << ") for item " << i << " (" << items[i].label << ")\n";
         }
     }
 }

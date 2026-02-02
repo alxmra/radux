@@ -494,17 +494,27 @@ void RadialMenu::on_click(int n_press, double x, double y) {
 bool RadialMenu::on_key_press(guint keyval, guint keycode, Gdk::ModifierType state) {
     reset_activity_timer();
 
+    // Debug output
+    std::cerr << "Key press: keyval=" << keyval << ", keycode=" << keycode
+              << ", state=" << static_cast<int>(state) << "\n";
+
     // Check for hotkeys first
     if (hotkey_manager_) {
         auto item_index = hotkey_manager_->find_item(keyval, state);
-        if (item_index && *item_index < current_items_->size()) {
-            const auto& item = (*current_items_)[*item_index];
-            if (item.has_submenu()) {
-                push_menu(item.submenu, item.label);
-            } else {
-                execute_command(item);
+        if (item_index) {
+            std::cerr << "Hotkey matched item index: " << *item_index << "\n";
+            if (*item_index < current_items_->size()) {
+                const auto& item = (*current_items_)[*item_index];
+                std::cerr << "Item: " << item.label << ", has_submenu: " << item.has_submenu() << "\n";
+                if (item.has_submenu()) {
+                    push_menu(item.submenu, item.label);
+                } else {
+                    execute_command(item);
+                }
+                return true;
             }
-            return true;
+        } else {
+            std::cerr << "No hotkey match found\n";
         }
     }
 
