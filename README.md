@@ -7,7 +7,7 @@
 </p>
 
 
-A simplistic radial menu for Linux for the [lazy](https://xkcd.com/1319/).
+A simplistic Linux radial menu for the [lazy](https://xkcd.com/1319/).
 
 
 ## Features
