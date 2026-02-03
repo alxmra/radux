@@ -7,7 +7,7 @@
 </p>
 
 
-A simplistic X11 only (for now) Linux radial menu for the [lazy](https://xkcd.com/1319/).
+A simplistic X11-only (atm) Linux radial menu for the [lazy](https://xkcd.com/1319/).
 
 
 ## Features
