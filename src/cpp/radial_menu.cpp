@@ -141,40 +141,74 @@ void RadialMenu::present_at(int x, int y) {
     int half_width = width / 2;
     int half_height = height / 2;
 
-    // Get screen dimensions using xdotool
-    int screen_width = 1920;  // fallback default
-    int screen_height = 1080; // fallback default
+    // Find which monitor contains the cursor and get its geometry
+    int monitor_x = 0, monitor_y = 0;
+    int monitor_width = 1920, monitor_height = 1080;
 
-    // Try to get actual screen dimensions
-    try {
-        FILE* pipe = popen("xdotool getdisplaygeometry 2>/dev/null", "r");
-        if (pipe) {
-            char buffer[64];
-            if (fgets(buffer, sizeof(buffer), pipe)) {
-                sscanf(buffer, "%d %d", &screen_width, &screen_height);
+    // Use xrandr to get monitor information
+    FILE* pipe = popen("xrandr --query 2>/dev/null", "r");
+    if (pipe) {
+        char line[512];
+        bool found_monitor = false;
+
+        while (fgets(line, sizeof(line), pipe) && !found_monitor) {
+            // Only process lines with "connected"
+            if (strstr(line, " connected")) {
+                // Find resolution+position pattern - look for "WIDTHxHEIGHT+X+Y" with space or "connected" before it
+                for (size_t i = 0; line[i] && !found_monitor; i++) {
+                    // Must be preceded by space or start of line to avoid matching inside other numbers
+                    if (i == 0 || line[i-1] == ' ' || line[i-1] == 'd') {  // after "connected" or space
+                        int w, h, mx, my;
+                        if (sscanf(line + i, "%dx%d+%d+%d", &w, &h, &mx, &my) == 4) {
+                            // Sanity check: reasonable monitor values
+                            if (w >= 800 && h >= 600 && w < 10000 && h < 10000) {
+                                // Check if cursor (x,y) is within this monitor
+                                if (x >= mx && x < mx + w && y >= my && y < my + h) {
+                                    monitor_x = mx;
+                                    monitor_y = my;
+                                    monitor_width = w;
+                                    monitor_height = h;
+                                    found_monitor = true;
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            pclose(pipe);
         }
-    } catch (...) {
-        // Use fallback values
+        pclose(pipe);
     }
 
     // Calculate where the window should be to fit on screen
     int target_x = x;
     int target_y = y;
 
-    // Adjust X position if too close to left or right edge
-    if (x < half_width) {
-        target_x = half_width;
-    } else if (x > screen_width - half_width) {
-        target_x = screen_width - half_width;
+    // Calculate window position (centered on cursor)
+    int window_left = x - half_width;
+    int window_right = x + half_width;
+    int window_top = y - half_height;
+    int window_bottom = y + half_height;
+
+    // Only adjust if window would extend beyond monitor bounds
+    // Adjust by the minimum amount needed to fit
+    // Left edge
+    if (window_left < monitor_x) {
+        // Shift right by the overflow amount
+        target_x = x + (monitor_x - window_left);
+    }
+    // Right edge
+    else if (window_right > monitor_x + monitor_width) {
+        // Shift left by the overflow amount
+        target_x = x - (window_right - (monitor_x + monitor_width));
     }
 
-    // Adjust Y position if too close to top or bottom edge
-    if (y < half_height) {
-        target_y = half_height;
-    } else if (y > screen_height - half_height) {
-        target_y = screen_height - half_height;
+    // Top edge
+    if (window_top < monitor_y) {
+        target_y = y + (monitor_y - window_top);
+    }
+    // Bottom edge
+    else if (window_bottom > monitor_y + monitor_height) {
+        target_y = y - (window_bottom - (monitor_y + monitor_height));
     }
 
     // Move mouse to the adjusted position if needed
@@ -197,9 +231,27 @@ void RadialMenu::present_at(int x, int y) {
 
     // Spawn xdotool to move window
     try {
-        std::string cmd = "xdotool search --name \"Radial Menu\" windowmove --sync " +
-                         std::to_string(x_pos) + " " + std::to_string(y_pos);
-        Glib::spawn_command_line_async(cmd);
+        // First search for the window to get its ID
+        std::string search_cmd = "xdotool search --name \"Radial Menu\"";
+        FILE* pipe = popen(search_cmd.c_str(), "r");
+        if (pipe) {
+            char window_id[64];
+            if (fgets(window_id, sizeof(window_id), pipe)) {
+                // Remove newline
+                window_id[strcspn(window_id, "\n")] = 0;
+
+                // xdotool windowmove uses SCREEN-RELATIVE coordinates, not global
+                // So we need to convert global x_pos to screen-relative
+                int screen_x = x_pos - monitor_x;
+                int screen_y = y_pos - monitor_y;
+
+                // Now move it using screen-relative coordinates
+                std::string cmd = "xdotool windowmove --sync " + std::string(window_id) +
+                                 " " + std::to_string(screen_x) + " " + std::to_string(screen_y);
+                Glib::spawn_command_line_async(cmd);
+            }
+            pclose(pipe);
+        }
     } catch (...) {
         // Ignore xdotool errors
     }

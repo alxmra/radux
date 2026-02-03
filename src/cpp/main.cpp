@@ -6,6 +6,77 @@
 #include <cstdio>
 #include <fstream>
 #include <filesystem>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+
+// PID file path for single-instance enforcement
+static const char* PID_FILE = "/tmp/radux-menu.pid";
+
+// Kill existing radux-menu instance gracefully using PID file
+static bool kill_existing_instance() {
+    // Try to read the PID file
+    std::ifstream pid_file(PID_FILE);
+    if (!pid_file.is_open()) {
+        return false;  // No PID file means no existing instance
+    }
+
+    pid_t old_pid;
+    pid_file >> old_pid;
+    pid_file.close();
+
+    if (old_pid <= 0) {
+        std::remove(PID_FILE);
+        return false;
+    }
+
+    // Check if the process is actually running
+    if (kill(old_pid, 0) != 0) {
+        // Process doesn't exist, clean up stale PID file
+        std::remove(PID_FILE);
+        return false;
+    }
+
+    std::cerr << "Killing existing radux-menu instance (PID " << old_pid << ")...\n";
+
+    // Send SIGTERM for graceful shutdown
+    if (kill(old_pid, SIGTERM) == 0) {
+        // Wait for process to exit gracefully
+        for (int i = 0; i < 10; i++) {
+            usleep(50000);  // 50ms
+            if (kill(old_pid, 0) != 0) {
+                // Process has exited
+                std::cerr << "Existing instance terminated.\n";
+                std::remove(PID_FILE);
+                return true;
+            }
+        }
+
+        // Still running after 500ms, force kill
+        std::cerr << "Instance did not exit gracefully, forcing...\n";
+        kill(old_pid, SIGKILL);
+        usleep(100000);  // 100ms for cleanup
+        std::remove(PID_FILE);
+    }
+
+    return true;
+}
+
+// Write PID file for current instance
+static bool write_pid_file() {
+    std::ofstream pid_file(PID_FILE);
+    if (!pid_file.is_open()) {
+        std::cerr << "Warning: Could not create PID file\n";
+        return false;
+    }
+
+    pid_file << getpid() << std::endl;
+    pid_file.close();
+
+    // Set PID file to be deleted on exit
+    // (Note: this may not work on all systems, so we also clean it up on shutdown)
+    return true;
+}
 
 // Helper to find config file in standard locations
 static std::string find_config_file() {
@@ -92,6 +163,9 @@ protected:
     }
 
     void on_shutdown() override {
+        // Clean up PID file
+        std::remove(PID_FILE);
+
         delete g_window;
         g_window = nullptr;
         Gtk::Application::on_shutdown();
@@ -99,6 +173,12 @@ protected:
 };
 
 int main(int argc, char** argv) {
+    // Kill any existing radux-menu instance before starting
+    kill_existing_instance();
+
+    // Write our PID file
+    write_pid_file();
+
     // Parse command line arguments
     std::string config_file;
     std::string cli_config;
