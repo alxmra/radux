@@ -7,7 +7,7 @@
 </p>
 
 
-A simplistic X11-only (atm) Linux radial menu for the [lazy](https://xkcd.com/1319/).
+A simplistic Linux radial menu for the [lazy](https://xkcd.com/1319/).
 
 
 ## Features
@@ -22,7 +22,7 @@ A simplistic X11-only (atm) Linux radial menu for the [lazy](https://xkcd.com/13
 - **Multi-monitor** - Works across multiple monitors
 - **Smooth animations** - Configurable animation speed
 
-**NOTE: RADUX ONLY SUPPORTS X11 FOR NOW. WAYLAND SUPPORT WILL BE IMPLEMENTED SOON**
+**NOTE: RADUX ONLY SUPPORTS X11**. It is up to the user to add exceptions for floating
 
 ## Installation
 
