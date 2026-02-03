@@ -6,23 +6,121 @@
 #include <cctype>
 #include <iostream>
 #include <filesystem>
+#include <cstdlib>
+#include <limits>
+
+// PathValidator implementation
+std::string PathValidator::get_home_directory() {
+    const char* home = std::getenv("HOME");
+    if (!home) {
+        home = std::getenv("USERPROFILE");
+    }
+    return home ? home : "/";
+}
+
+std::string PathValidator::normalize_path(const std::string& path) {
+    try {
+        std::filesystem::path p(path);
+        std::filesystem::path canonical = std::filesystem::weakly_canonical(p);
+        return canonical.string();
+    } catch (...) {
+        return path;
+    }
+}
+
+bool PathValidator::is_in_directory(const std::string& path, const std::string& directory) {
+    try {
+        std::filesystem::path p = normalize_path(path);
+        std::filesystem::path dir = normalize_path(directory);
+
+        // Check if path starts with directory
+        auto path_str = p.string();
+        auto dir_str = dir.string();
+
+        // Ensure directory ends with separator for proper matching
+        if (!dir_str.empty() && dir_str.back() != '/') {
+            dir_str += '/';
+        }
+        if (!path_str.empty() && path_str.back() != '/' &&
+            std::filesystem::is_directory(p)) {
+            // For directories, add trailing slash for comparison
+            path_str += '/';
+        }
+
+        return path_str.rfind(dir_str, 0) == 0;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PathValidator::is_config_path_allowed(const std::string& filepath) {
+    std::string normalized = normalize_path(filepath);
+
+    // Allow paths in ~/.config/radux/
+    std::string home = get_home_directory();
+    std::string config_dir = home + "/.config/radux";
+
+    if (is_in_directory(normalized, config_dir)) {
+        return true;
+    }
+
+    // Allow paths relative to current working directory (./)
+    std::string cwd = std::filesystem::current_path().string();
+
+    if (is_in_directory(normalized, cwd)) {
+        return true;
+    }
+
+    // Absolute path outside allowed directories
+    std::cerr << "SECURITY ERROR: Config file path not allowed: " << filepath << "\n";
+    std::cerr << "Config files must be in ~/.config/radux/ or relative to current directory.\n";
+    return false;
+}
 
 RadialConfig RadialConfig::from_yaml(const std::string& filepath) {
     RadialConfig config;
 
+    // SECURITY: Validate config file path
+    if (!PathValidator::is_config_path_allowed(filepath)) {
+        std::cerr << "Refusing to load config from disallowed path.\n";
+        return config;
+    }
+
+    // SECURITY: Check file size before parsing
+    try {
+        std::filesystem::path file_path(filepath);
+        if (!std::filesystem::exists(file_path)) {
+            std::cerr << "Config file does not exist: " << filepath << "\n";
+            return config;
+        }
+
+        size_t file_size = std::filesystem::file_size(file_path);
+        if (file_size > SecurityLimits::MAX_CONFIG_FILE_SIZE) {
+            std::cerr << "SECURITY ERROR: Config file too large (" << file_size << " bytes).\n";
+            std::cerr << "Maximum allowed size: " << SecurityLimits::MAX_CONFIG_FILE_SIZE << " bytes.\n";
+            return config;
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error accessing config file: " << e.what() << "\n";
+        return config;
+    }
+
     try {
         YAML::Node yaml_config = YAML::LoadFile(filepath);
 
-        // Read radius
+        // Read radius with bounds checking
         if (yaml_config["radius"]) {
-            config.radius = yaml_config["radius"].as<int>();
+            int r = yaml_config["radius"].as<int>();
+            config.radius = std::clamp(r, 50, 500);
         }
 
-        // Read center_radius (supports both inner-radius and center_radius)
+        // Read center_radius with bounds checking
         if (yaml_config["inner-radius"]) {
-            config.center_radius = yaml_config["inner-radius"].as<int>();
+            int cr = yaml_config["inner-radius"].as<int>();
+            config.center_radius = std::clamp(cr, 10, 200);
         } else if (yaml_config["center_radius"]) {
-            config.center_radius = yaml_config["center_radius"].as<int>();
+            int cr = yaml_config["center_radius"].as<int>();
+            config.center_radius = std::clamp(cr, 10, 200);
         }
 
         // Parse theme (global colors)
@@ -42,14 +140,14 @@ RadialConfig RadialConfig::from_yaml(const std::string& filepath) {
                     // Multiplier format: "1.5x"
                     try {
                         double mult = std::stod(speed_str.substr(0, speed_str.length() - 1));
-                        config.animation_speed_ms = static_cast<int>(500 * mult);
+                        config.animation_speed_ms = std::clamp(static_cast<int>(500 * mult), 100, 5000);
                     } catch (...) {
                         // Keep default
                     }
                 } else {
                     // Milliseconds format: "500"
                     try {
-                        config.animation_speed_ms = std::stoi(speed_str);
+                        config.animation_speed_ms = std::clamp(std::stoi(speed_str), 100, 5000);
                     } catch (...) {
                         // Keep default
                     }
@@ -59,18 +157,36 @@ RadialConfig RadialConfig::from_yaml(const std::string& filepath) {
 
         // Parse auto-close
         if (yaml_config["auto-close-milliseconds"]) {
-            config.auto_close_milliseconds = yaml_config["auto-close-milliseconds"].as<int>();
+            int ac = yaml_config["auto-close-milliseconds"].as<int>();
+            config.auto_close_milliseconds = std::clamp(ac, 0, 60000); // Max 60 seconds
         }
 
-        // Read items
+        // Read items with depth and count limits
         if (yaml_config["items"]) {
+            size_t item_count = 0;
             for (const auto& item : yaml_config["items"]) {
-                MenuItem menu_item = parse_menu_item(item, config.theme);
+                if (item_count >= SecurityLimits::MAX_MENU_ITEMS) {
+                    std::cerr << "WARNING: Maximum menu items limit reached ("
+                              << SecurityLimits::MAX_MENU_ITEMS << "). Skipping remaining items.\n";
+                    break;
+                }
+
+                MenuItem menu_item = parse_menu_item(item, config.theme, 0);
                 if (menu_item.is_valid()) {
                     config.items.push_back(menu_item);
+                    item_count++;
                 }
             }
         }
+
+        // SECURITY: Check total item count
+        if (config.count_total_items() > SecurityLimits::MAX_TOTAL_ITEMS) {
+            std::cerr << "SECURITY ERROR: Total menu items exceed limit ("
+                      << SecurityLimits::MAX_TOTAL_ITEMS << ").\n";
+            config.items.clear();
+            return config;
+        }
+
     } catch (const YAML::Exception& e) {
         std::cerr << "Error loading YAML: " << e.what() << "\n";
     }
@@ -78,8 +194,15 @@ RadialConfig RadialConfig::from_yaml(const std::string& filepath) {
     return config;
 }
 
-MenuItem RadialConfig::parse_menu_item(const YAML::Node& node, const Theme& parent_theme) {
+MenuItem RadialConfig::parse_menu_item(const YAML::Node& node, const Theme& parent_theme, int depth) {
     MenuItem item;
+
+    // SECURITY: Check recursion depth
+    if (depth >= SecurityLimits::MAX_YAML_DEPTH) {
+        std::cerr << "SECURITY ERROR: Maximum submenu nesting depth reached ("
+                  << SecurityLimits::MAX_YAML_DEPTH << ").\n";
+        return item;
+    }
 
     if (!node["label"]) {
         std::cerr << "Warning: Item missing label, skipping\n";
@@ -122,10 +245,18 @@ MenuItem RadialConfig::parse_menu_item(const YAML::Node& node, const Theme& pare
         // Get effective theme for this submenu (inherits from parent if item has colors)
         Theme effective_theme = item.get_effective_theme(parent_theme);
 
+        size_t submenu_count = 0;
         for (const auto& sub : node["submenu"]) {
-            MenuItem subitem = parse_menu_item(sub, effective_theme);
+            if (submenu_count >= SecurityLimits::MAX_MENU_ITEMS) {
+                std::cerr << "WARNING: Maximum submenu items limit reached ("
+                          << SecurityLimits::MAX_MENU_ITEMS << "). Skipping remaining items.\n";
+                break;
+            }
+
+            MenuItem subitem = parse_menu_item(sub, effective_theme, depth + 1);
             if (subitem.is_valid()) {
                 item.submenu.push_back(subitem);
+                submenu_count++;
             }
         }
     } else {
@@ -262,4 +393,28 @@ bool RadialConfig::validate_item_commands(const MenuItem& item, CommandBlacklist
     }
 
     return true;
+}
+
+// Count total items recursively (including all submenus)
+size_t RadialConfig::count_total_items() const {
+    size_t count = 0;
+
+    for (const auto& item : items) {
+        count += count_items_recursive(item);
+    }
+
+    return count;
+}
+
+// Helper to count items recursively
+size_t RadialConfig::count_items_recursive(const MenuItem& item) const {
+    size_t count = 1; // Count this item
+
+    if (item.has_submenu()) {
+        for (const auto& subitem : item.submenu) {
+            count += count_items_recursive(subitem);
+        }
+    }
+
+    return count;
 }

@@ -10,6 +10,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM REQUIRED gtkmm-4.0)
 pkg_check_modules(YAML_CPP REQUIRED yaml-cpp)
 
+# Find X11 (optional - for X11-specific features like pointer warping)
+find_package(X11)
+
 # Source files
 set(SOURCES
     main.cpp
@@ -18,6 +21,7 @@ set(SOURCES
     color_theme.cpp
     hotkey_manager.cpp
     usage_tracker.cpp
+    platform_Utilities.cpp
 )
 
 set(HEADERS
@@ -29,6 +33,8 @@ set(HEADERS
     usage_tracker.hpp
     command_blacklist.hpp
     shell_Utilities.hpp
+    platform_Utilities.hpp
+    debug.hpp
 )
 
 # Create executable
@@ -39,6 +45,15 @@ target_link_libraries(radux-menu
     ${GTKMM_LIBRARIES}
     ${YAML_CPP_LIBRARIES}
 )
+
+# Link X11 if available (for pointer warping on X11)
+if(X11_FOUND)
+    target_link_libraries(radux-menu X11)
+    target_compile_definitions(radux-menu PRIVATE HAS_X11=1)
+    message(STATUS "X11 found - pointer warping support enabled")
+else()
+    message(STATUS "X11 not found - building for Wayland-only (pointer warping disabled)")
+endif()
 
 # Include directories
 target_include_directories(radux-menu PRIVATE

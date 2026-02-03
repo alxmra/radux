@@ -1,5 +1,6 @@
 #include "radial_menu.hpp"
 #include "config_loader.hpp"
+#include "platform_Utilities.hpp"
 #include <iostream>
 #include <memory>
 #include <cstdlib>
@@ -28,31 +29,15 @@ static std::string find_config_file() {
     return ""; // No config found
 }
 
-// Helper to get mouse position using xdotool
+// Helper to get mouse position using platform abstraction (works on X11 and Wayland)
 static bool get_mouse_position(int& x, int& y) {
-    // Use full path to xdotool
-    FILE* pipe = popen("/usr/bin/xdotool getmouselocation --shell 2>/dev/null", "r");
-    if (!pipe) {
-        std::cerr << "Failed to run xdotool\n";
+    try {
+        PlatformDisplay display;
+        return display.get_pointer_position(x, y);
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to get mouse position: " << e.what() << "\n";
         return false;
     }
-
-    char buffer[256];
-    // Read entire output
-    size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, pipe);
-    buffer[bytes_read] = '\0';
-    pclose(pipe);
-
-    // Parse output - might be multiline or single line
-    int mouse_x = 0, mouse_y = 0;
-    if (sscanf(buffer, "X=%d Y=%d", &mouse_x, &mouse_y) == 2) {
-        x = mouse_x;
-        y = mouse_y;
-        return true;
-    }
-
-    std::cerr << "Failed to parse xdotool output: " << buffer << "\n";
-    return false;
 }
 
 // Global variables for communication between main and signal handler

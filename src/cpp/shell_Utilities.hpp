@@ -4,6 +4,9 @@
 #include <sstream>
 #include <vector>
 #include <algorithm>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 // Shell escape utilities for safe command execution
 class ShellEscaper {
@@ -170,60 +173,162 @@ struct CommandResult {
         : exit_code(-1), success(false) {}
 };
 
-// Safe command executor using direct system calls (no shell)
+// Safe command executor using fork+execve (NO shell involved)
 class SafeExecutor {
 public:
-    // Execute a command with arguments safely (no shell interpretation)
+    // Execute a command with arguments safely using execve (no shell interpretation)
     static CommandResult execute(const std::string& command, const std::vector<std::string>& args = {}) {
         CommandResult result;
 
-        // Build argument array
-        std::vector<char*> argv;
-        std::string cmd_copy = command; // Need persistent storage
+        // Create pipes for stdout and stderr
+        int stdout_pipe[2];
+        int stderr_pipe[2];
 
-        argv.push_back(const_cast<char*>(cmd_copy.c_str()));
-
-        // Add arguments
-        std::vector<std::string> args_copy = args; // Persistent storage
-        for (auto& arg : args_copy) {
-            argv.push_back(const_cast<char*>(arg.c_str()));
-        }
-        argv.push_back(nullptr);
-
-        // Use popen for simplicity (could be replaced with fork+execve for better security)
-        std::string full_cmd = cmd_copy;
-        for (const auto& arg : args) {
-            full_cmd += " " + ShellEscaper::escape_argument(arg);
-        }
-
-        FILE* pipe = popen(full_cmd.c_str(), "r");
-        if (!pipe) {
+        if (pipe(stdout_pipe) == -1 || pipe(stderr_pipe) == -1) {
             result.exit_code = -1;
-            result.stderr = "Failed to execute command";
+            result.stderr = "Failed to create pipes";
             return result;
         }
 
-        // Read output
-        char buffer[4096];
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-            result.stdout += buffer;
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            // Fork failed
+            close(stdout_pipe[0]);
+            close(stdout_pipe[1]);
+            close(stderr_pipe[0]);
+            close(stderr_pipe[1]);
+            result.exit_code = -1;
+            result.stderr = "Failed to fork process";
+            return result;
         }
 
-        result.exit_code = pclose(pipe);
+        if (pid == 0) {
+            // Child process
+            // Close unused pipe ends
+            close(stdout_pipe[0]);
+            close(stderr_pipe[0]);
+
+            // Redirect stdout and stderr
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            dup2(stderr_pipe[1], STDERR_FILENO);
+            close(stdout_pipe[1]);
+            close(stderr_pipe[1]);
+
+            // Build argv array for execve
+            std::vector<char*> argv;
+            std::string cmd_copy = command;
+
+            argv.push_back(const_cast<char*>(cmd_copy.c_str()));
+
+            // Add arguments
+            std::vector<std::string> args_copy = args;
+            for (auto& arg : args_copy) {
+                argv.push_back(const_cast<char*>(arg.c_str()));
+            }
+            argv.push_back(nullptr);
+
+            // Execute command (no shell involved)
+            execve(command.c_str(), argv.data(), environ);
+
+            // If execve returns, it failed
+            _exit(127);
+        }
+
+        // Parent process
+        close(stdout_pipe[1]);
+        close(stderr_pipe[1]);
+
+        // Read output
+        char buffer[4096];
+        ssize_t bytes_read;
+
+        // Read stdout
+        while ((bytes_read = read(stdout_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            result.stdout += buffer;
+        }
+        close(stdout_pipe[0]);
+
+        // Read stderr
+        while ((bytes_read = read(stderr_pipe[0], buffer, sizeof(buffer) - 1)) > 0) {
+            buffer[bytes_read] = '\0';
+            result.stderr += buffer;
+        }
+        close(stderr_pipe[0]);
+
+        // Wait for child process
+        int status;
+        waitpid(pid, &status, 0);
+
+        if (WIFEXITED(status)) {
+            result.exit_code = WEXITSTATUS(status);
+        } else {
+            result.exit_code = -1;
+        }
+
         result.success = (result.exit_code == 0);
 
         return result;
     }
 
-    // Execute command asynchronously (fire and forget)
+    // Execute command asynchronously using fork+execve (fire and forget, no shell)
     static bool execute_async(const std::string& command, const std::vector<std::string>& args = {}) {
-        std::string full_cmd = command;
-        for (const auto& arg : args) {
-            full_cmd += " " + ShellEscaper::escape_argument(arg);
+        pid_t pid = fork();
+
+        if (pid == -1) {
+            return false;
         }
 
-        // Use system() for async execution with proper escaping
-        // Note: This still goes through shell but with properly escaped arguments
-        return system(full_cmd.c_str()) != -1;
+        if (pid == 0) {
+            // Child process
+
+            // Double fork to avoid zombie processes
+            pid_t grandchild = fork();
+
+            if (grandchild == -1) {
+                _exit(1);
+            }
+
+            if (grandchild == 0) {
+                // Grandchild process
+                // Build argv array for execve
+                std::vector<char*> argv;
+                std::string cmd_copy = command;
+
+                argv.push_back(const_cast<char*>(cmd_copy.c_str()));
+
+                // Add arguments
+                std::vector<std::string> args_copy = args;
+                for (auto& arg : args_copy) {
+                    argv.push_back(const_cast<char*>(arg.c_str()));
+                }
+                argv.push_back(nullptr);
+
+                // Redirect stdin/stdout/stderr to /dev/null
+                int devnull = open("/dev/null", O_RDWR);
+                if (devnull != -1) {
+                    dup2(devnull, STDIN_FILENO);
+                    dup2(devnull, STDOUT_FILENO);
+                    dup2(devnull, STDERR_FILENO);
+                    close(devnull);
+                }
+
+                // Execute command (no shell involved)
+                execve(command.c_str(), argv.data(), environ);
+
+                // If execve returns, it failed
+                _exit(127);
+            }
+
+            // Child exits immediately
+            _exit(0);
+        }
+
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
     }
 };
