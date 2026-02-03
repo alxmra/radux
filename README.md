@@ -32,10 +32,9 @@ A simplistic X11-only (atm) Linux radial menu for the [lazy](https://xkcd.com/13
 cd src/cpp
 cmake -B build
 cmake --build build
-sudo cmake --install build
 ```
 
-The binary will be installed to `bin/radux-menu` in the project directory. (I felt like having a more specific name like this, but you may change it just to `radux` like I did)
+The binary will be automatically copied to `bin/radux-menu` in the project directory (I felt like having a more specific name like this, but you may change it just to `radux` like I did).
 
 
 ### From releases
