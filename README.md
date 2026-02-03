@@ -15,11 +15,8 @@ A simplistic Linux radial menu for the [lazy](https://xkcd.com/1319/).
 - **Radial menu interface** - Quick access menu at cursor position
 - **Nested submenus** - Organize items hierarchically
 - **Hotkey support** - Keyboard shortcuts with context-aware mapping
-- **Gesture support** - 2-finger scroll to navigate items
 - **Theme customization** - Custom colors, fonts, and sizes
 - **Icon support** - SVG/PNG icons for menu items
-- **Usage tracking** - Most-used item highlighting
-- **Multi-monitor** - Works across multiple monitors
 - **Smooth animations** - Configurable animation speed
 
 **NOTE: RADUX ONLY SUPPORTS X11**. It is up to the user to add exceptions for floating
